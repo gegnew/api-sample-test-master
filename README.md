@@ -1,5 +1,27 @@
 # API Sample Test
 
+## Debrief
+
+The biggest practical issue I ran into is that the `lastModifiedDate` logic was
+too recent to get any meetings. I hardcoded January 2023 as a rough start date
+for testing.
+
+The task requested essentially a duplication of the `processCompanies` and
+`processContacts` methods, so I endeavored to do so. However, this architecture
+leads to a good deal of duplication. From an ease-of-implementation
+perspective, I actually think this is just fine. However, it _also_ leads to
+duplication of API requests, which is inefficient, slow, and potentially
+costly. It would perhaps be better to get the account's companies, then
+associate them with contacts and meetings in one go. Reducing the number of
+requests would improve performance significantly.
+
+The queue is a nice feature; for the number of contacts here, perhaps
+unnecessary, but a forward-looking usage of the mongo API for increased
+traffic.
+
+The project could use a linting configuration to make collaboration on Github
+less noisy. Warnings for deprecated packages should also be dealt with.
+
 ## Getting Started
 
 This project requires a newer version of Node. Don't forget to install the NPM
