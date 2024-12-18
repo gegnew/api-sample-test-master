@@ -322,6 +322,12 @@ const processContacts = async (domain, hubId, q) => {
   return true;
 };
 
+/**
+ * Get meetings
+ */
+const processMeetings = async (domain, hubId, q) => {
+};
+
 const createQueue = (domain, actions) =>
   queue(async (action, callback) => {
     actions.push(action);
@@ -388,6 +394,16 @@ const pullDataFromHubspot = async () => {
       console.log(err, {
         apiKey: domain.apiKey,
         metadata: { operation: "processCompanies", hubId: account.hubId },
+      });
+    }
+
+    try {
+      await processMeetings(domain, account.hubId, q);
+      console.log("process meetings");
+    } catch (err) {
+      console.log(err, {
+        apiKey: domain.apiKey,
+        metadata: { operation: "processMeetings", hubId: account.hubId },
       });
     }
 
