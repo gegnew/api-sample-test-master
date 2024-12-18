@@ -326,6 +326,152 @@ const processContacts = async (domain, hubId, q) => {
  * Get meetings
  */
 const processMeetings = async (domain, hubId, q) => {
+  const account = domain.integrations.hubspot.accounts.find(
+    (account) => account.hubId === hubId,
+  );
+  const lastPulledDate = new Date(account.lastPulledDates.meetings);
+  const now = new Date();
+
+  let hasMore = true;
+  const offsetObject = {};
+  const limit = 100;
+
+  while (hasMore) {
+    const lastModifiedDate = offsetObject.lastModifiedDate || lastPulledDate;
+    const lastModifiedDateFilter = generateLastModifiedDateFilter(
+      lastModifiedDate,
+      now,
+      "hs_lastmodifieddate",
+    );
+    const searchObject = {
+      filterGroups: [lastModifiedDateFilter],
+      sorts: [{ propertyName: "hs_lastmodifieddate", direction: "ASCENDING" }],
+      properties: [
+        "hs_meeting_title",
+        "hs_createdate",
+        "hs_lastmodifieddate",
+        "hs_object_id",
+        "hs_meeting_location",
+        "hs_meeting_external_url",
+        "hubspot_owner_id",
+      ],
+      limit,
+      after: offsetObject.after,
+    };
+
+    let tryCount = 0;
+    while (tryCount <= 4) {
+      try {
+        searchResult =
+          await hubspotClient.crm.objects.meetings.searchApi.doSearch(
+            searchObject,
+          );
+        break;
+      } catch (err) {
+        tryCount++;
+
+        if (new Date() > expirationDate)
+          await refreshAccessToken(domain, hubId);
+
+        await new Promise((resolve, reject) =>
+          setTimeout(resolve, 5000 * Math.pow(2, tryCount)),
+        );
+      }
+    }
+
+    if (!searchResult)
+      throw new Error("Failed to fetch meetings for the 4th time. Aborting.");
+
+    const data = searchResult?.results || [];
+    offsetObject.after = parseInt(searchResult?.paging?.next?.after);
+    const meetingIds = data.map((meeting) => meeting.id);
+
+    const meetingsToAssociate = meetingIds;
+    const contactAssociationsResults =
+      (
+        await (
+          await hubspotClient.apiRequest({
+            method: "post",
+            path: "/crm/v3/associations/MEETINGS/CONTACTS/batch/read",
+            body: {
+              inputs: meetingsToAssociate.map((meetingId) => ({
+                id: meetingId,
+              })),
+            },
+          })
+        ).json()
+      )?.results || [];
+
+    const contactAssociations = Object.fromEntries(
+      contactAssociationsResults
+        .map((a) => {
+          if (a.from) {
+            meetingsToAssociate.splice(
+              meetingsToAssociate.indexOf(a.from.id),
+              1,
+            );
+            return [a.from.id, a.to[0].id];
+          } else return false;
+        })
+        .filter((x) => x),
+    );
+
+    for (let i = 0; i < data.length; i++) {
+      const meeting = data[i];
+      let contactData = {};
+
+      if (!meeting.properties) return;
+      const contactId = contactAssociations[meeting.id];
+      if (!contactId) continue;
+
+      // could also be createdAt > updatedAt
+      const isCreated =
+        !lastPulledDate || new Date(meeting.createdAt) > lastPulledDate;
+
+      try {
+        contactData =
+          await hubspotClient.crm.contacts.basicApi.getById(contactId);
+      } catch (e) {
+        e.message === "HTTP request failed"
+          ? console.error(JSON.stringify(e.response, null, 2))
+          : console.error(e);
+        return;
+      }
+
+      const meetingProperties = {
+        contact_id: contactId,
+        contact_name: (
+          (contactData.properties.firstname || "") +
+          " " +
+          (contactData.properties.lastname || "")
+        ).trim(),
+        contact_email: contactData.properties.email,
+        ...meeting.properties,
+      };
+
+      const actionTemplate = {
+        includeInAnalytics: 0,
+        meetingProperties: { ...filterNullValuesFromObject(meetingProperties) },
+      };
+
+      q.push({
+        actionName: isCreated ? "Meeting Created" : "Meeting Updated",
+        actionDate:
+          new Date(isCreated ? meeting.createdAt : meeting.updatedAt) - 2000,
+        ...actionTemplate,
+      });
+    }
+
+    if (!offsetObject?.after) {
+      hasMore = false;
+      break;
+    } else if (offsetObject?.after >= 9900) {
+      offsetObject.after = 0;
+      offsetObject.lastModifiedDate = new Date(
+        data[data.length - 1].updatedAt,
+      ).valueOf();
+    }
+  }
 };
 
 const createQueue = (domain, actions) =>
